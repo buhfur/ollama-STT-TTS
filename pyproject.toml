@@ -21,7 +21,7 @@ dependencies = [
     "webrtcvad>=2.0.10",
     "faster-whisper>=1.0.0",
     "sounddevice>=0.4.6",
-    "piper-tts>=1.2.0",
+    #"piper-tts>=1.2.0",
     "psutil",
     "scipy",
     "requests",

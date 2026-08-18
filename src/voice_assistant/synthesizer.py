@@ -1,93 +1,186 @@
 import logging
-import json
-import os
 import queue
 import threading
-import time
+
 import numpy as np
 import sounddevice as sd
-from scipy.signal import resample
-from piper import PiperVoice
-from .audio_utils import RATE, MAX_TTS_ERRORS
+import torch
+
+from scipy.signal import resample_poly
+
+from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+from .audio_utils import MAX_TTS_ERRORS
+
 
 class Synthesizer:
     def __init__(self, args, interrupt_event: threading.Event):
         self.args = args
         self.interrupt_event = interrupt_event
+
         self.queue = queue.Queue()
         self.stop_event = threading.Event()
         self.is_speaking_event = threading.Event()
         self.has_failed = threading.Event()
-        
-        self.voice = None
-        self.sample_rate = 16000
+
+        self.model = None
+        self.sample_rate = None
+
+        # Debugging for correct sample rate 
+        print("Chatterbox rate:", self.sample_rate)
+
+        device_info = sd.query_devices(
+                self.args.piper_output_device_index,
+                "output",
+                )
+
+        print("Output device:", device_info["name"])
+        print("Output rate:", device_info["default_samplerate"])
 
         self._load_model()
-        
-        self.thread = threading.Thread(target=self._worker, daemon=True)
+
+        self.thread = threading.Thread(
+            target=self._worker,
+            daemon=True,
+        )
         self.thread.start()
 
     def _load_model(self):
-        logging.info("Initializing Piper TTS...")
+        logging.info("Initializing Chatterbox-Turbo TTS...")
+
         try:
-            config_path = self.args.piper_model_path + ".json"
-            if not os.path.exists(config_path):
-                raise FileNotFoundError(f"Config not found: {config_path}")
+            # ROCm uses PyTorch's CUDA-compatible API.
+            device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-                self.sample_rate = int(config['audio']['sample_rate'])
+            logging.info(f"Chatterbox device: {device}")
 
-            self.voice = PiperVoice.load(self.args.piper_model_path, config_path)
-            logging.info(f"Loaded Piper voice. Rate: {self.sample_rate}Hz")
+            self.model = ChatterboxTurboTTS.from_pretrained(
+                device=device
+            )
+
+            self.sample_rate = self.model.sr
+
+            device_info = sd.query_devices(
+                    self.args.piper_output_device_index,
+                    "output",
+                    )
+
+            self.output_rate = int(
+                    device_info["default_samplerate"]
+                    )
+
+            logging.info(
+                f"Loaded Chatterbox-Turbo. "
+                f"Rate: {self.sample_rate}Hz"
+            )
+
         except Exception as e:
-            logging.critical(f"TTS Init Failed: {e}")
+            logging.critical(
+                f"Chatterbox TTS initialization failed: {e}"
+            )
             self.has_failed.set()
+    def _generate_audio(self, text: str) -> np.ndarray:
+        wav = self.model.generate(text)
+
+        audio = (
+            wav
+            .detach()
+            .squeeze()
+            .float()
+            .cpu()
+            .numpy()
+        )
+
+        audio = np.asarray(audio, dtype=np.float32)
+
+        print("model sample rate:", self.sample_rate)
+        print("output sample rate:", self.output_rate)
+        print("before resample:", len(audio))
+
+        if self.sample_rate != self.output_rate:
+            audio = resample_poly(
+                audio,
+                self.output_rate,
+                self.sample_rate,
+            ).astype(np.float32)
+
+        print("after resample:", len(audio))
+
+        return audio
 
     def _worker(self):
         consecutive_errors = 0
-        target_sample_rate = 48000  # Match device default sample rate
-        
+
         while not self.stop_event.is_set():
             text = None
+
             try:
                 text = self.queue.get(timeout=0.1)
+
                 if text is None:
                     break
 
+                if self.interrupt_event.is_set():
+                    continue
+
                 self.is_speaking_event.set()
-                with sd.OutputStream(
-                    samplerate=target_sample_rate,
-                    device=self.args.piper_output_device_index,
-                    channels=1,
-                    dtype='int16'
-                ) as stream:
-                    for audio_chunk in self.voice.synthesize(text):
-                        if self.interrupt_event.is_set():
-                            break
-                        
-                        audio_np = np.frombuffer(audio_chunk.audio_int16_bytes, dtype=np.int16)
-                        
-                        # Resample if necessary
-                        if self.sample_rate != target_sample_rate:
-                            num_samples = round(len(audio_np) * target_sample_rate / self.sample_rate)
-                            audio_np = resample(audio_np, num_samples)
-                        
-                        stream.write(audio_np.astype(np.int16))
+
+                logging.debug(
+                    f"Generating Chatterbox speech: {text!r}"
+                )
+
+                audio = self._generate_audio(text)
+
+                # User may have interrupted while generation was running.
+                if self.interrupt_event.is_set():
+                    continue
+
+                device_info = sd.query_devices(
+                self.args.piper_output_device_index,
+                "output",
+                )
+
+                output_rate = int(device_info["default_samplerate"])
+
+                if self.sample_rate != output_rate:
+                    audio = resample_poly(
+                        audio,
+                        output_rate,
+                        self.sample_rate,
+                    ).astype(np.float32)
+
+                audio = self._generate_audio(text)
+
+                print("audio shape:", audio.shape)
+                print("audio dtype:", audio.dtype)
+                print("audio min/max:", audio.min(), audio.max())
+
+                sd.play(
+                    audio,
+                    #samplerate=self.sample_rate,
+                    samplerate=44100,
+                    #device=self.args.piper_output_device_index,
+                    blocking=True,
+                )
 
                 consecutive_errors = 0
+
             except queue.Empty:
                 continue
+
             except Exception as e:
                 logging.error(f"TTS Error: {e}")
+
                 consecutive_errors += 1
+
                 if consecutive_errors >= MAX_TTS_ERRORS:
                     self.has_failed.set()
                     break
+
             finally:
                 if text is not None:
                     self.queue.task_done()
-                
+
                 if self.queue.empty():
                     self.is_speaking_event.clear()
 
@@ -96,18 +189,27 @@ class Synthesizer:
             self.queue.put(text)
 
     def stop(self):
-        """Ensure all resources are released on shutdown"""
         self.stop_event.set()
-        self.clear_queue()  # Clear before stopping
-        self.queue.put(None) # Sentinel to stop the worker
+
+        self.clear_queue()
+
+        # Stop any currently playing sounddevice audio.
+        sd.stop()
+
+        self.queue.put(None)
+
         self.thread.join(timeout=5.0)
 
-        # Clean up voice model
-        if self.voice:
-            del self.voice
-            self.voice = None
+        if self.model is not None:
+            del self.model
+            self.model = None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def clear_queue(self):
-        """Clears all items from the synthesizer queue."""
         with self.queue.mutex:
             self.queue.queue.clear()
+
+        # Also interrupt current playback.
+        sd.stop()
