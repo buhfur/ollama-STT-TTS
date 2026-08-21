@@ -220,7 +220,8 @@ class VoiceAssistant:
             # STT
             # -------------------------------------------------
             transcription_start = time.time()
-            user_text = self._transcribe_with_retry(audio_np)
+            user_text = self._transcribe_with_retry(audio_np) # Actual trasncription ?? 
+            # pass into intent router ? 
             transcription_duration = time.time() - transcription_start
 
             logging.debug(
@@ -474,11 +475,12 @@ class VoiceAssistant:
             user_text = self.transcriber.transcribe(audio_np)
 
             if user_text and user_text.strip():
+                # pipe into intent router here ? 
                 logging.debug(f"Transcription successful on attempt {attempt + 1}: '{user_text}'")
                 # Restore original thresholds
                 self.args.whisper_avg_logprob = original_logprob
                 self.args.whisper_no_speech_prob = original_nospeech
-                return user_text
+                return user_text # Returns transcription  
 
             if attempt < max_retries - 1:
                 logging.debug(f"Attempt {attempt + 1} failed, trying with relaxed thresholds")
