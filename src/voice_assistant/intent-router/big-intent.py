@@ -84,6 +84,7 @@ You are a deterministic Linux terminal intent router. Your sole job is to parse 
 - Process Management: ps aux, pkill, killall, systemctl
 - Compilation & Execution: gcc, python3, g++, /bin/sh
 - Environments: python3 virtualenv, tmux, export (bash variables)
+- Containerization: docker,docker compose
 
 [RULES]
 1. Select the primary CLI tool name for the "intent" key.
@@ -105,7 +106,7 @@ class IntentRouter:
         self.model_url="http://localhost:11434/api/generate"
 
 
-    async def prompt(self, user_prompt) -> Dict[str, Any]:
+    async def get_intent(self, user_prompt) -> Dict[str, Any]:
         payload = {
             "model": self.router_model,  # Highly capable at JSON/Function calling, low latency
             "prompt": f"{self.router_prompt}\nUser input: '{user_prompt}'\nOutput:",
@@ -113,7 +114,7 @@ class IntentRouter:
             "format": "json"  # Forces JSON constraint natively in Ollama
         }
                 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.post(self.model_url, json=payload)
                 response.raise_for_status()
@@ -146,12 +147,14 @@ class IntentRouter:
 async def main():
 
     BIR = IntentRouter()
-    res = await BIR.prompt("run a system update for me")
-    #print(res["args"]["request"])
-    #print(res["intent"])
-    if res["intent"] == "terminal_automation":
-        LIR = IntentRouter(IRP=LINUX_INTENT_PROMPT, IM=LINUX_MODEL)
-        print(await LIR.prompt(res["args"]["request"]))
+    res = await BIR.get_intent("containerize this python3 directory for me")
+    BIR_intent = res["intent"]
+    print(f"Intent: {BIR_intent}")
+    # flow control to decide which task router is used 
+    if BIR_intent == "terminal_automation":
+        # TIR = Task Intent Router
+        TIR = IntentRouter(IRP=LINUX_INTENT_PROMPT, IM=LINUX_MODEL)
+        print(await TIR.get_intent(res["args"]["request"]))
 
 
 if __name__ == '__main__':
