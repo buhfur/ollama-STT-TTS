@@ -7,7 +7,7 @@ Do not determine the final action yourself. Only classify the request into the a
 
 Available intents:
 
-1. "terminal_automation"
+1. "LIR"
    For requests involving shell commands, scripts, package management, files, processes, services, system configuration, development tools, or other terminal/system operations.
 
    Examples:
@@ -16,7 +16,7 @@ Available intents:
    - "Run my backup script"
    - "Find all .log files larger than 1 GB"
 
-2. "desktop_automation"
+2. "LIR"
    For requests involving graphical desktop interaction, windows, applications, workspaces, keyboard/mouse actions, display settings, or other GUI operations.
 
    Examples:
@@ -25,7 +25,7 @@ Available intents:
    - "Switch to workspace 3"
    - "Maximize this window"
 
-3. "browser_automation"
+3. "BIR"
    For requests involving websites, browser tabs, navigation, web forms, clicking page elements, downloading through a browser, or other browser-controlled interactions.
 
    Examples:
@@ -34,7 +34,7 @@ Available intents:
    - "Open a new tab and go to Reddit"
    - "Fill out this web form"
 
-4. "chat_fallback"
+4. "CIR"
    For requests that do not require automation, including general questions, explanations, programming questions, reasoning, or conversation.
 
    Examples:
